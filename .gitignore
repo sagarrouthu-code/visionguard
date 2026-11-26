@@ -1,0 +1,25 @@
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Model weights (yolov8n.pt downloads automatically on first run)
+*.pt
+
+# Videos: large, and you may not own the rights to them
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.m4v
+videos/uploads/
+
+# Files the app creates while running
+snapshots/
+alerts/
+# Editor and local settings
+.vscode/
+.idea/
+.env

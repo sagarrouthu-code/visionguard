@@ -1,0 +1,1412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VisionGuard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,400..800&display=swap" rel="stylesheet">
+
+<style>
+/* Light "control desk" palette: readable on a projector, the video is the only dark thing. */
+:root{
+  --page:#e4e7ea;
+  --panel:#f4f5f6;
+  --ink:#1a1e23;
+  --muted:#59616b;
+  --rule:#c0c5cb;
+  --control:#8f969e;
+  --red:#c2202b;
+  --amber:#a85a00;
+  --amber-fill:#f2a31b;
+  --green:#1b7a45;
+  --focus:#1a5fd0;
+  --screen:#0b0c0d;
+  --font:"Archivo","Segoe UI",system-ui,-apple-system,sans-serif;
+}
+
+*{box-sizing:border-box}
+
+html,body{margin:0}
+
+body{
+  background:var(--page);
+  color:var(--ink);
+  font:15px/1.4 var(--font);
+  height:100dvh;
+  display:flex;
+  flex-direction:column;
+}
+
+button,input{font:inherit;color:inherit}
+
+:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+
+/* ---------- top bar ---------- */
+.top{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:10px 24px;
+  padding:10px 20px;
+  background:var(--panel);
+  border-bottom:1px solid var(--rule);
+}
+
+.brand h1{
+  margin:0;
+  font-size:22px;
+  font-weight:800;
+  font-stretch:78%;
+  letter-spacing:.2px;
+  line-height:1.1;
+}
+.brand p{margin:1px 0 0;color:var(--muted);font-size:12.5px}
+
+.link{display:flex;align-items:center;gap:8px;font-weight:600}
+.led{
+  width:11px;height:11px;border-radius:50%;
+  background:var(--control);
+  box-shadow:inset 0 0 0 1px rgba(0,0,0,.25);
+}
+.led.live{background:var(--green)}
+.led.warn{background:var(--amber-fill)}
+
+.source{display:flex;align-items:center;gap:8px;margin-left:auto}
+.source label{color:var(--muted);font-size:13px}
+.source select{
+  min-height:40px;max-width:260px;
+  padding:7px 10px;
+  border:1px solid var(--control);border-radius:3px;background:#fff;
+  font-weight:600;
+}
+
+/* upload progress strip */
+.uploadbar{
+  display:flex;align-items:center;gap:16px;
+  padding:8px 20px;
+  background:var(--panel);
+  border-bottom:1px solid var(--rule);
+  font-weight:600;
+}
+.uploadbar[hidden]{display:none}
+.uploadbar .track{flex:1;max-width:360px}
+.uploadbar .track i{background:var(--ink)}
+.uploadbar.ok{color:var(--green)}
+.uploadbar.bad{color:var(--red)}
+
+.alarm{position:relative;display:inline-flex;cursor:pointer}
+.alarm input{position:absolute;opacity:0;width:1px;height:1px;margin:0}
+.alarm input:focus-visible + .btn{outline:3px solid var(--focus);outline-offset:2px}
+.alarm input:checked + .btn{--lamp:var(--red)}
+.alarm:active .btn{transform:translateY(3px);box-shadow:0 0 0 var(--edge)}
+
+/* ---------- buttons: console keys ----------
+   A key sits proud of the desk (the bottom edge) and travels down when pressed.
+   Latching keys stay down with their lamp lit. */
+.btn{
+  --edge:#7b838b;
+  --lamp:#b4bac0;
+  display:inline-flex;align-items:center;gap:8px;
+  min-height:40px;padding:7px 15px 7px 13px;
+  font-weight:700;
+  background:#fbfbfc;
+  border:1px solid var(--control);
+  border-radius:3px;
+  box-shadow:0 3px 0 var(--edge);
+  cursor:pointer;
+  user-select:none;
+  transition:transform .07s ease-out, box-shadow .07s ease-out, background-color .12s;
+}
+.btn:hover{background:#fff}
+.btn:active,
+.btn.lit,
+.btn.lamp[aria-pressed="true"]{
+  transform:translateY(3px);
+  box-shadow:0 0 0 var(--edge);
+}
+.btn svg{width:15px;height:15px;flex:none}
+
+/* lamp on latching keys */
+.btn.lamp::before{
+  content:"";width:10px;height:10px;border-radius:50%;flex:none;
+  background:var(--lamp);
+  box-shadow:inset 0 0 0 1px rgba(0,0,0,.28);
+  transition:background-color .12s;
+}
+.btn.wire[aria-pressed="true"]{--lamp:#ffd400;background:#f1ecd0;border-color:#8a7a00}
+.btn.zone[aria-pressed="true"]{--lamp:#ff4a3d;background:#f4dcd9;border-color:#a3342b}
+.btn.ok[aria-pressed="true"]{--lamp:#2fae66;background:#d6eddd;border-color:var(--green)}
+.alarm input:checked + .btn{background:#f4dcd9;border-color:#a3342b;transform:translateY(3px);box-shadow:0 0 0 var(--edge)}
+
+/* transport keys: icon colour says what it does; the lit one says what is happening */
+.btn.go svg{color:var(--green)}
+.btn.hold svg{color:var(--amber)}
+.btn.halt svg{color:var(--red)}
+.btn.go.lit{background:#d6eddd;border-color:var(--green);color:#0d4a28}
+.btn.hold.lit{background:#fae2b3;border-color:var(--amber);color:#633500}
+
+/* restart: the arrow turns while the key is held */
+#restart svg{transition:transform .35s ease-out}
+#restart:active svg{transform:rotate(-200deg)}
+
+/* primary action */
+.btn.primary{
+  --edge:#000;
+  background:var(--ink);border-color:var(--ink);color:#fff;
+}
+.btn.primary:hover{background:#2b3138}
+
+/* clear is destructive: red mark, no lamp */
+.btn.clear svg{color:var(--red)}
+
+/* ---------- layout ---------- */
+.layout{
+  flex:1;min-height:0;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 390px;
+}
+
+.watch{
+  min-height:0;
+  overflow:auto;
+  padding:16px 22px 18px;
+  display:flex;flex-direction:column;gap:12px;
+}
+
+.screen{
+  width:min(100%, calc((100dvh - 232px) * var(--ratio, 1.7778)));
+  aspect-ratio:var(--ratio, 1.7778);
+  margin:4px auto 0;
+  background:var(--screen);
+  transition:box-shadow .12s;
+}
+.screen.alert{box-shadow:0 0 0 4px var(--red)}
+.screen{position:relative}
+
+/* drag-and-drop target */
+.drop{
+  position:absolute;inset:0;
+  display:none;align-items:center;justify-content:center;
+  padding:20px;text-align:center;
+  background:rgba(244,245,246,.93);
+  border:3px dashed var(--ink);
+  font-size:20px;font-weight:700;
+  pointer-events:none;
+}
+.screen.dragging .drop{display:flex}
+.screen canvas{display:block;width:100%;height:100%;cursor:crosshair}
+
+.toolbar{
+  display:flex;flex-wrap:wrap;gap:10px 28px;align-items:center;
+  width:min(100%, calc((100dvh - 232px) * var(--ratio, 1.7778)));
+  margin:0 auto;
+}
+.group{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.group + .group{padding-left:28px;border-left:1px solid var(--rule)}
+.group-name{color:var(--muted);font-size:13px;margin-right:2px}
+
+.hint{
+  width:min(100%, calc((100dvh - 232px) * var(--ratio, 1.7778)));
+  margin:0 auto;
+  color:var(--muted);font-size:13.5px;
+  min-height:1.4em;
+}
+
+/* ---------- right rail ---------- */
+.rail{
+  background:var(--panel);
+  border-left:1px solid var(--rule);
+  display:flex;flex-direction:column;
+  min-height:0;overflow:auto;
+}
+
+/* Sections never shrink into each other. Only the incident list scrolls on its own. */
+.block{flex:none;padding:16px 20px 18px}
+.block + .block{border-top:1px solid var(--rule)}
+.block h2{
+  margin:0 0 10px;
+  font-size:16px;font-weight:700;
+}
+.block h2 span{color:var(--muted);font-weight:500;margin-left:4px}
+
+.block.grow{
+  flex:1 1 0;min-height:240px;
+  display:flex;flex-direction:column;
+  overflow:hidden;
+}
+.block.grow h2{flex:none}
+
+.empty{margin:0;color:var(--muted);font-size:14px;max-width:34ch}
+
+/* incidents */
+#incidents{
+  list-style:none;margin:0;padding:0 4px 0 0;
+  flex:1 1 0;min-height:0;overflow-y:auto;
+  display:flex;flex-direction:column;gap:8px;
+}
+
+.incident{
+  width:100%;
+  display:grid;
+  grid-template-columns:116px 1fr auto;
+  gap:2px 12px;
+  align-items:start;
+  text-align:left;
+  padding:8px 10px 8px 8px;
+  background:#fff;
+  border:1px solid var(--rule);
+  border-left:5px solid var(--red);
+  border-radius:0;
+  cursor:pointer;
+}
+.incident.baggage{border-left-color:var(--amber-fill)}
+.incident:hover{border-color:var(--control);border-left-width:5px}
+.incident.baggage:hover{border-left-color:var(--amber-fill)}
+.incident.intrusion:hover{border-left-color:var(--red)}
+
+.incident img{
+  grid-row:1 / span 2;
+  width:116px;aspect-ratio:16/9;object-fit:cover;
+  background:#d3d7db;
+  display:block;
+}
+.incident img.missing{visibility:hidden}
+
+.incbody{display:flex;flex-direction:column;gap:1px;min-width:0}
+.inckind{font-weight:700}
+.incident.intrusion .inckind{color:var(--red)}
+.incident.baggage .inckind{color:var(--amber)}
+.inctext{font-size:13.5px;color:var(--ink)}
+.inctime{font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+.incident.latest{animation:arrive .9s ease-out 1}
+@keyframes arrive{
+  0%{background:#fbd9dc}
+  100%{background:#fff}
+}
+
+/* bags in view */
+.bagrow{padding:8px 0}
+.bagrow + .bagrow{border-top:1px solid var(--rule)}
+.bagtop{display:flex;justify-content:space-between;gap:12px;margin-bottom:6px}
+.bagname{font-weight:600}
+.bagstate{color:var(--muted);font-variant-numeric:tabular-nums}
+.bagrow.alone .bagstate{color:var(--amber);font-weight:600}
+.bagrow.unattended .bagstate{color:var(--red);font-weight:700}
+
+.track{height:7px;background:#d6dade}
+.track i{display:block;height:100%;width:0;background:var(--amber-fill)}
+.bagrow.unattended .track i{background:var(--red)}
+
+/* settings */
+.setting + .setting{margin-top:16px}
+.setting .row{display:flex;justify-content:space-between;gap:12px;font-weight:600}
+.setting .row output{font-variant-numeric:tabular-nums}
+.setting input[type=range]{
+  -webkit-appearance:none;appearance:none;
+  width:100%;height:28px;margin:6px 0 0;
+  background:transparent;cursor:pointer;
+}
+.setting input[type=range]::-webkit-slider-runnable-track{
+  height:6px;background:#cdd2d7;border:1px solid var(--control);
+}
+.setting input[type=range]::-moz-range-track{
+  height:6px;background:#cdd2d7;border:1px solid var(--control);
+}
+/* fader cap with a grip line */
+.setting input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;
+  width:18px;height:26px;margin-top:-10px;
+  background:#fbfbfc linear-gradient(var(--ink),var(--ink)) center / 2px 12px no-repeat;
+  border:1px solid var(--control);border-radius:2px;
+  box-shadow:0 3px 0 var(--edge, #7b838b);
+}
+.setting input[type=range]::-moz-range-thumb{
+  width:16px;height:24px;
+  background:#fbfbfc linear-gradient(var(--ink),var(--ink)) center / 2px 12px no-repeat;
+  border:1px solid var(--control);border-radius:2px;
+  box-shadow:0 3px 0 #7b838b;
+}
+.setting input[type=range]:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+.setting p{margin:0;color:var(--muted);font-size:13px}
+
+/* snapshot viewer */
+dialog{
+  max-width:min(92vw,1000px);
+  padding:0;border:0;
+  background:var(--panel);color:var(--ink);
+}
+dialog::backdrop{background:rgba(10,12,14,.72)}
+dialog img{display:block;width:100%;height:auto;background:#000}
+.vbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 16px}
+.vbar p{margin:0}
+
+/* ---------- small screens: stack, and keep the incident log ---------- */
+@media (max-width:960px){
+  body{height:auto;min-height:100dvh}
+  .layout{display:block}
+  .watch{overflow:visible;padding:14px}
+  .screen,.toolbar,.hint{width:100%}
+  .group + .group{padding-left:0;border-left:0}
+  .rail{border-left:0;border-top:1px solid var(--rule);overflow:visible}
+  .block.grow{flex:none;min-height:0;display:block;overflow:visible}
+  #incidents{max-height:60dvh}
+  .source{margin-left:0;width:100%}
+  .source select{flex:1;min-width:0;max-width:none}
+  .incident{grid-template-columns:96px 1fr auto}
+  .incident img{width:96px}
+}
+
+@media (prefers-reduced-motion:reduce){
+  .incident.latest{animation:none}
+  .screen{transition:none}
+}
+</style>
+</head>
+
+<body>
+
+<header class="top">
+  <div class="brand">
+    <h1>VisionGuard</h1>
+    <p>Perimeter and baggage watch</p>
+  </div>
+
+  <div class="link" role="status" aria-live="polite">
+    <span class="led" id="led"></span>
+    <span id="linkText">Connecting</span>
+  </div>
+
+  <div class="source">
+    <label for="videoSelect">Video</label>
+    <select id="videoSelect" aria-label="Choose a video"></select>
+    <button class="btn primary" id="uploadBtn" type="button">Upload video</button>
+    <input type="file" id="fileInput" hidden accept="video/*,.mp4,.avi,.mov,.mkv,.webm,.m4v">
+  </div>
+
+  <label class="alarm">
+    <input type="checkbox" id="alarm">
+    <span class="btn lamp">Alarm sound</span>
+  </label>
+</header>
+
+<div class="uploadbar" id="uploadBar" role="status" aria-live="polite" hidden>
+  <span id="uploadText"></span>
+  <div class="track" id="uploadTrack"><i id="uploadFill"></i></div>
+</div>
+
+<main class="layout">
+
+  <section class="watch" aria-label="Live camera">
+
+    <div class="screen" id="screen">
+      <canvas id="cv" width="960" height="540" aria-label="Live video with detected people, bags and the zones you drew"></canvas>
+      <div class="drop" id="drop">Drop a video file here to upload it</div>
+    </div>
+
+    <div class="toolbar">
+      <div class="group" role="group" aria-label="Playback">
+        <button class="btn go" id="play" type="button" aria-pressed="false">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3 1.5v13l11-6.5z"/></svg>
+          <span id="playLabel">Play</span>
+        </button>
+        <button class="btn hold" id="pause" type="button" aria-pressed="false">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3 2h4v12H3zM9 2h4v12H9z"/></svg>
+          Pause
+        </button>
+        <button class="btn halt" id="stop" type="button">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3 3h10v10H3z"/></svg>
+          Stop
+        </button>
+        <button class="btn" id="restart" type="button">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.8-4.1"/><path d="M13.5 1.5v4h-4" stroke-linejoin="round"/></svg>
+          Restart
+        </button>
+      </div>
+
+      <div class="group" role="group" aria-label="Draw on the video">
+        <span class="group-name">Draw</span>
+        <button class="btn lamp wire" id="modeLine" type="button" aria-pressed="true">Tripwire</button>
+        <button class="btn lamp zone" id="modePoly" type="button" aria-pressed="false">Restricted zone</button>
+        <button class="btn clear" id="clear" type="button">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M3 3l10 10M13 3L3 13"/></svg>
+          Clear
+        </button>
+      </div>
+    </div>
+
+    <p class="hint" id="hint"></p>
+
+  </section>
+
+  <aside class="rail" aria-label="Alerts and settings">
+
+    <section class="block grow">
+      <h2>Incidents <span id="incCount"></span></h2>
+      <ul id="incidents" aria-live="polite"></ul>
+    </section>
+
+    <section class="block">
+      <h2>Bags in view</h2>
+      <div id="bags"></div>
+    </section>
+
+    <section class="block">
+      <h2>Detection settings</h2>
+
+      <div class="setting">
+        <button class="btn lamp ok" id="ownerMode" type="button" aria-pressed="true">Owner tracking</button>
+        <p style="margin-top:10px">Alert when a bag's owner walks away, even if other people stand near it. Turn off to alert only when nobody is near.</p>
+      </div>
+
+      <div class="setting">
+        <button class="btn lamp ok" id="rememberMode" type="button" aria-pressed="true">Remember lost bags</button>
+        <p style="margin-top:10px">If the detector loses a bag after it is put down, keep timing it and re-check the spot before alerting.</p>
+      </div>
+
+      <div class="setting">
+        <div class="row">
+          <label for="seconds">Alert when a bag is alone for</label>
+          <output id="secondsOut">15 s</output>
+        </div>
+        <input type="range" id="seconds" min="3" max="60" step="1" value="15">
+      </div>
+
+      <div class="setting">
+        <div class="row">
+          <label for="conf">Minimum bag confidence</label>
+          <output id="confOut">0.20</output>
+        </div>
+        <input type="range" id="conf" min="0.05" max="0.6" step="0.05" value="0.2">
+        <p>Lower finds more bags, but adds false alarms.</p>
+      </div>
+    </section>
+
+  </aside>
+
+</main>
+
+<dialog id="viewer" aria-label="Incident snapshot">
+  <img id="vImg" alt="">
+  <div class="vbar">
+    <p id="vText"></p>
+    <button class="btn" id="vClose" type="button">Close</button>
+  </div>
+</dialog>
+
+<script>
+(() => {
+"use strict";
+
+const $ = id => document.getElementById(id);
+const cv = $("cv");
+const ctx = cv.getContext("2d");
+const screenEl = $("screen");
+
+const KIND = {
+  intrusion: { label: "Intrusion",      cls: "intrusion" },
+  baggage:   { label: "Unattended bag", cls: "baggage" },
+};
+
+const C = {
+  person: "#5be38c",
+  hot:    "#ff4d4f",
+  bag:    "#e9edf1",
+  alone:  "#ffb020",
+  zone:   "#ff5a4f",
+  wire:   "#ffd400",
+};
+
+const MONO = 'ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace';
+
+const S = {
+  frame: null,
+  data: { persons: [], bags: [], fps: 0, playing: true, ended: false },
+  link: "connecting",            // connecting | live | closed
+  mode: "line",
+  zones: { line: null, polygon: null },
+  draft: [],
+  mouse: null,
+  seen: new Set(),
+  first: true,
+  previewOnly: false,   // showing a still of the first frame, not live video
+  maxMb: 500,
+  events: [],
+  source: "",
+  alertText: "",
+  alertUntil: 0,
+  audio: null,
+  incSig: "",
+  bagSig: "",
+};
+
+let s = 1;   // canvas drawing scale (canvas width / 960)
+
+/* ------------------------------------------------------------------ */
+/* small helpers                                                       */
+/* ------------------------------------------------------------------ */
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+
+const cap = t => t ? t[0].toUpperCase() + t.slice(1) : t;
+
+function post(url, body = {}) {
+  return fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).catch(() => {});
+}
+
+function baseName(p) {
+  return (p || "").split(/[\\/]/).pop();
+}
+
+/* ------------------------------------------------------------------ */
+/* drawing                                                             */
+/* ------------------------------------------------------------------ */
+
+function px(p) { return [p[0] * cv.width, p[1] * cv.height]; }
+
+function osdText(t, x, y, o = {}) {
+  const { size = 13, color = "#fff", align = "left", weight = 600 } = o;
+  ctx.font = `${weight} ${size * s}px ${MONO}`;
+  ctx.textAlign = align;
+  ctx.textBaseline = "alphabetic";
+  ctx.lineJoin = "round";
+  ctx.lineWidth = 3.5 * s;
+  ctx.strokeStyle = "rgba(0,0,0,.85)";
+  ctx.strokeText(t, x, y);
+  ctx.fillStyle = color;
+  ctx.fillText(t, x, y);
+}
+
+function trace(points, close) {
+  ctx.beginPath();
+  points.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+  if (close) ctx.closePath();
+}
+
+function handle(p, color) {
+  ctx.fillStyle = color;
+  ctx.strokeStyle = "rgba(0,0,0,.7)";
+  ctx.lineWidth = 2 * s;
+  ctx.beginPath();
+  ctx.arc(p[0], p[1], 5.5 * s, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+}
+
+function drawZones() {
+  const { line, polygon } = S.zones;
+
+  if (polygon) {
+    const pts = polygon.map(px);
+    trace(pts, true);
+    ctx.fillStyle = "rgba(255,90,79,.16)";
+    ctx.fill();
+    ctx.setLineDash([10 * s, 6 * s]);
+    ctx.lineWidth = 2.5 * s;
+    ctx.strokeStyle = C.zone;
+    ctx.stroke();
+    ctx.setLineDash([]);
+    const x = Math.min(...pts.map(p => p[0]));
+    const y = Math.min(...pts.map(p => p[1]));
+    osdText("RESTRICTED ZONE", x, Math.max(16 * s, y - 8 * s), { color: C.zone, size: 12, weight: 700 });
+  }
+
+  if (line) {
+    const pts = line.map(px);
+    trace(pts, false);
+    ctx.lineWidth = 3 * s;
+    ctx.strokeStyle = C.wire;
+    ctx.stroke();
+    pts.forEach(p => handle(p, C.wire));
+    osdText("TRIPWIRE", pts[0][0] + 8 * s, pts[0][1] - 10 * s, { color: C.wire, size: 12, weight: 700 });
+  }
+
+  if (S.draft.length) {
+    const pts = S.draft.map(px);
+    if (S.mouse) pts.push(S.mouse);
+    trace(pts, false);
+    ctx.setLineDash([8 * s, 6 * s]);
+    ctx.lineWidth = 2.5 * s;
+    ctx.strokeStyle = S.mode === "line" ? C.wire : C.zone;
+    ctx.stroke();
+    ctx.setLineDash([]);
+    S.draft.map(px).forEach(p => handle(p, "#fff"));
+  }
+}
+
+// CCTV-style target: thin outline plus heavier corner brackets
+function target(b, color, tag, heavy, dashed) {
+  const x1 = b[0] * cv.width,  y1 = b[1] * cv.height;
+  const x2 = b[2] * cv.width,  y2 = b[3] * cv.height;
+  const w = x2 - x1, h = y2 - y1;
+
+  ctx.strokeStyle = color;
+
+  if (dashed) {                       // remembered bag: not currently seen by the detector
+    ctx.setLineDash([7 * s, 5 * s]);
+    ctx.lineWidth = 2.5 * s;
+    ctx.strokeRect(x1, y1, w, h);
+    ctx.setLineDash([]);
+    osdText(tag, x1, Math.max(14 * s, y1 - 6 * s), { color, size: 12, weight: 700 });
+    return;
+  }
+
+  ctx.globalAlpha = .5;
+  ctx.lineWidth = 1.5 * s;
+  ctx.strokeRect(x1, y1, w, h);
+  ctx.globalAlpha = 1;
+
+  const L = Math.max(6 * s, Math.min(16 * s, w / 3, h / 3));
+  ctx.lineWidth = (heavy ? 4.5 : 2.8) * s;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1 + L); ctx.lineTo(x1, y1); ctx.lineTo(x1 + L, y1);
+  ctx.moveTo(x2 - L, y1); ctx.lineTo(x2, y1); ctx.lineTo(x2, y1 + L);
+  ctx.moveTo(x2, y2 - L); ctx.lineTo(x2, y2); ctx.lineTo(x2 - L, y2);
+  ctx.moveTo(x1 + L, y2); ctx.lineTo(x1, y2); ctx.lineTo(x1, y2 - L);
+  ctx.stroke();
+
+  osdText(tag, x1, Math.max(14 * s, y1 - 6 * s), { color, size: 12, weight: 700 });
+}
+
+function boxCenter(b) {
+  return [(b[0] + b[2]) / 2 * cv.width, (b[1] + b[3]) / 2 * cv.height];
+}
+
+function drawDetections() {
+  const owners = new Set(S.data.bags.filter(b => b.owner != null).map(b => b.owner));
+
+  // dashed link from each bag to its owner, while the owner is in view
+  S.data.bags.forEach(b => {
+    const o = S.data.persons.find(p => p.id === b.owner);
+    if (!o) return;
+    const a = boxCenter(b.box), c = boxCenter(o.box);
+    ctx.setLineDash([6 * s, 6 * s]);
+    ctx.lineWidth = 2 * s;
+    ctx.strokeStyle = b.status === "unattended" ? C.hot : b.status === "alone" ? C.alone : C.person;
+    ctx.beginPath();
+    ctx.moveTo(a[0], a[1]);
+    ctx.lineTo(c[0], c[1]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  });
+
+  S.data.persons.forEach(p =>
+    target(p.box, p.flag ? C.hot : C.person,
+           "#" + p.id + (owners.has(p.id) ? " OWNER" : ""), p.flag));
+
+  S.data.bags.forEach(b => {
+    const unattended = b.status === "unattended";
+    const color = unattended ? C.hot : b.status === "alone" ? C.alone : C.bag;
+    const tag = b.status === "ok"
+      ? b.label
+      : unattended
+        ? `${b.label} UNATTENDED`
+        : b.owner != null
+          ? `${b.label} owner away ${Math.round(b.alone)}s`
+          : `${b.label} ${Math.round(b.alone)}s`;
+    target(b.box, color, b.ghost ? tag + " (remembered)" : tag, unattended, b.ghost);
+  });
+}
+
+function statusText() {
+  if (S.link === "connecting") return "Connecting";
+  if (S.link === "closed")     return "Reconnecting";
+  if (S.data.ended)            return "Video ended";
+  if (!S.data.playing && (!S.frame || S.previewOnly)) return "Ready";
+  return S.data.playing ? "Live" : "Paused";
+}
+
+function drawOsd() {
+  const W = cv.width, H = cv.height, pad = 14 * s;
+  const alertOn = performance.now() < S.alertUntil;
+
+  osdText("CAM 01  " + baseName(S.source), pad, pad + 12 * s, { size: 13, weight: 700 });
+
+  const now = new Date();
+  osdText(now.toLocaleDateString("en-GB") + "  " + now.toLocaleTimeString("en-GB"),
+          W - pad, pad + 12 * s, { align: "right", size: 13 });
+
+  const st = statusText();
+  const live = st === "Live";
+  osdText(st.toUpperCase(), W - pad, pad + 32 * s, { align: "right", size: 12, weight: 700, color: live ? "#fff" : "#ffd400" });
+  if (live) {
+    ctx.fillStyle = "#ff3b3b";
+    ctx.beginPath();
+    ctx.arc(W - pad - (ctx.measureText(st.toUpperCase()).width) - 10 * s, pad + 28 * s, 4.5 * s, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const counts = `PEOPLE ${S.data.persons.length}   BAGS ${S.data.bags.length}   ${S.data.fps || 0} FPS`;
+  osdText(counts, pad, H - pad - (alertOn ? 40 * s : 0), { size: 12 });
+
+  if (alertOn) {
+    ctx.fillStyle = "rgba(194,32,43,.94)";
+    ctx.fillRect(0, H - 40 * s, W, 40 * s);
+    osdText("ALERT  " + S.alertText, pad, H - 14 * s, { size: 15, weight: 700 });
+  }
+}
+
+function placeholder() {
+  const W = cv.width, H = cv.height;
+  const msg = S.link === "live"
+    ? "No video yet. Press Play, or load a video file."
+    : "Connecting to the VisionGuard server\u2026";
+  osdText(msg, W / 2, H / 2, { align: "center", size: 15, weight: 500, color: "#c9ced4" });
+}
+
+function setFrame(im, preview) {
+  if (cv.width !== im.width || cv.height !== im.height) {
+    cv.width = im.width;
+    cv.height = im.height;
+    document.documentElement.style.setProperty("--ratio", im.width / im.height);
+  }
+  S.frame = im;
+  S.previewOnly = !!preview;
+  syncStatus();
+  syncControls();
+  draw();
+}
+
+function draw() {
+  s = cv.width / 960;
+  ctx.fillStyle = "#0b0c0d";
+  ctx.fillRect(0, 0, cv.width, cv.height);
+
+  if (S.frame) {
+    ctx.drawImage(S.frame, 0, 0, cv.width, cv.height);
+    drawZones();
+    drawDetections();
+  } else {
+    placeholder();
+    drawZones();
+  }
+  drawOsd();
+}
+
+/* ------------------------------------------------------------------ */
+/* drawing zones with the mouse                                        */
+/* ------------------------------------------------------------------ */
+
+function mousePos(e) {
+  const r = cv.getBoundingClientRect();
+  return [
+    (e.clientX - r.left) * cv.width  / r.width,
+    (e.clientY - r.top)  * cv.height / r.height,
+  ];
+}
+
+function saveZones() { post("/api/zones", S.zones); }
+
+function setMode(m) {
+  S.mode = m;
+  S.draft = [];
+  $("modeLine").setAttribute("aria-pressed", m === "line");
+  $("modePoly").setAttribute("aria-pressed", m === "poly");
+  updateHint();
+  draw();
+}
+
+function updateHint() {
+  const d = S.draft.length;
+  $("hint").textContent = S.mode === "line"
+    ? (d ? "Click the second point." : "Click two points on the video to place the tripwire.")
+    : (d
+        ? "Keep clicking corners. Press Enter or click the first point to close. Backspace removes the last point, Esc cancels."
+        : "Click to outline a restricted zone, one corner at a time.");
+}
+
+function finishPolygon() {
+  if (S.draft.length >= 3) {
+    S.zones.polygon = S.draft;
+    S.draft = [];
+    saveZones();
+    updateHint();
+    draw();
+  }
+}
+
+cv.addEventListener("mousemove", e => {
+  S.mouse = mousePos(e);
+  if (S.draft.length) draw();
+});
+
+cv.addEventListener("mouseleave", () => {
+  S.mouse = null;
+  if (S.draft.length) draw();
+});
+
+cv.addEventListener("click", e => {
+  const p = mousePos(e);
+  const n = [p[0] / cv.width, p[1] / cv.height];
+
+  if (S.mode === "line") {
+    S.draft.push(n);
+    if (S.draft.length === 2) {
+      S.zones.line = S.draft;
+      S.draft = [];
+      saveZones();
+    }
+  } else {
+    if (S.draft.length >= 3) {
+      const first = px(S.draft[0]);
+      const r = cv.getBoundingClientRect();
+      const tol = 14 * cv.width / r.width;
+      if (Math.hypot(first[0] - p[0], first[1] - p[1]) < tol) {
+        finishPolygon();
+        return;
+      }
+    }
+    S.draft.push(n);
+  }
+
+  updateHint();
+  draw();
+});
+
+document.addEventListener("keydown", e => {
+  const tag = (document.activeElement || {}).tagName;
+  const typing = tag === "INPUT" || tag === "TEXTAREA";
+
+  if (e.key === "Escape" && S.draft.length) {
+    S.draft = [];
+    updateHint();
+    draw();
+  } else if (e.key === "Enter" && S.mode === "poly" && !typing) {
+    finishPolygon();
+  } else if (e.key === "Backspace" && S.draft.length && !typing) {
+    e.preventDefault();
+    S.draft.pop();
+    updateHint();
+    draw();
+  } else if (e.key === " " && !typing && tag !== "BUTTON") {
+    e.preventDefault();
+    (S.data.playing ? $("pause") : $("play")).click();
+  }
+});
+
+$("modeLine").onclick = () => setMode("line");
+$("modePoly").onclick = () => setMode("poly");
+
+$("clear").onclick = () => {
+  S.zones = { line: null, polygon: null };
+  S.draft = [];
+  saveZones();
+  updateHint();
+  draw();
+};
+
+/* ------------------------------------------------------------------ */
+/* playback + source                                                   */
+/* ------------------------------------------------------------------ */
+
+$("play").onclick    = () => post("/api/video/play");
+$("pause").onclick   = () => post("/api/video/pause");
+$("stop").onclick    = () => post("/api/video/stop");
+$("restart").onclick = () => post("/api/video/restart");
+
+/* ------------------------------------------------------------------ */
+/* video library + upload                                              */
+/* ------------------------------------------------------------------ */
+
+const EXT = [".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v"];
+const bar = $("uploadBar");
+let barTimer = null;
+let uploading = false;
+
+function showBar(text, pct, kind) {
+  clearTimeout(barTimer);
+  bar.hidden = false;
+  bar.className = "uploadbar" + (kind ? " " + kind : "");
+  $("uploadText").textContent = text;
+  $("uploadTrack").hidden = pct == null;
+  $("uploadFill").style.width = Math.round((pct || 0) * 100) + "%";
+}
+
+function hideBarSoon(ms) {
+  clearTimeout(barTimer);
+  barTimer = setTimeout(() => { bar.hidden = true; }, ms);
+}
+
+async function errorText(r) {
+  try {
+    const d = await r.json();
+    return typeof d.detail === "string" ? d.detail : "The request failed.";
+  } catch (e) {
+    return "The request failed.";
+  }
+}
+
+async function loadLibrary(select) {
+  let info;
+  try {
+    info = await (await fetch("/api/videos")).json();
+  } catch (e) {
+    return;
+  }
+
+  S.maxMb = info.max_mb || 500;
+  $("uploadBtn").disabled = !info.upload || uploading;
+  $("uploadBtn").title = info.upload ? "" :
+    "Uploads need the python-multipart package. Run: pip install python-multipart, then restart the server.";
+
+  const sel = $("videoSelect");
+  sel.replaceChildren();
+
+  const add = (parent, value, label) => {
+    const o = el("option", null, label);
+    o.value = value;
+    parent.append(o);
+  };
+  const group = (label, items) => {
+    if (!items.length) return;
+    const g = document.createElement("optgroup");
+    g.label = label;
+    items.forEach(v => add(g, v.source, v.uploaded ? `${v.name} (${v.mb} MB)` : v.name));
+    sel.append(g);
+  };
+
+  add(sel, "0", "Webcam (camera 0)");
+  group("Sample videos", info.videos.filter(v => !v.uploaded));
+  group("Your uploads", info.videos.filter(v => v.uploaded));
+
+  const want = select || info.current || "";
+  sel.value = want;
+  if (sel.value !== want && want) {      // e.g. a source set from outside the videos folder
+    add(sel, want, baseName(want));
+    sel.value = want;
+  }
+  S.source = sel.value;
+}
+
+function showPreview(source) {
+  if (!source || source === "0") return;
+  const im = new Image();
+  im.onload = () => setFrame(im, true);
+  im.src = "/api/preview?source=" + encodeURIComponent(source) + "&t=" + Date.now();
+}
+
+async function useSource(source, play) {
+  let r;
+  try {
+    r = await fetch("/api/source", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source, play }),
+    });
+  } catch (e) {
+    showBar("Could not reach the server.", null, "bad");
+    hideBarSoon(6000);
+    return false;
+  }
+
+  if (!r.ok) {
+    showBar(await errorText(r), null, "bad");
+    hideBarSoon(6000);
+    await loadLibrary();
+    return false;
+  }
+
+  S.source = source;
+  S.data.playing = !!play;
+  S.data.ended = false;
+  S.frame = null;
+  S.previewOnly = false;
+  syncStatus();
+  syncControls();
+  draw();
+
+  if (!play) showPreview(source);
+  return true;
+}
+
+$("videoSelect").onchange = e => useSource(e.target.value, e.target.value === "0");
+
+function uploadFile(file) {
+  if (uploading) return;
+
+  const ext = "." + file.name.split(".").pop().toLowerCase();
+  if (!EXT.includes(ext)) {
+    showBar("That file type is not supported. Use " + EXT.join(", ") + ".", null, "bad");
+    hideBarSoon(6000);
+    return;
+  }
+  if (file.size > S.maxMb * 1024 * 1024) {
+    showBar(`That file is larger than the ${S.maxMb} MB limit.`, null, "bad");
+    hideBarSoon(6000);
+    return;
+  }
+
+  uploading = true;
+  $("uploadBtn").disabled = true;
+  showBar(`Uploading ${file.name}`, 0);
+
+  const done = (text, kind) => {
+    uploading = false;
+    $("uploadBtn").disabled = false;
+    showBar(text, null, kind);
+    hideBarSoon(kind === "ok" ? 8000 : 6000);
+  };
+
+  const fd = new FormData();
+  fd.append("file", file);
+
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/api/upload");
+
+  xhr.upload.onprogress = e => {
+    if (e.lengthComputable) showBar(`Uploading ${file.name}`, e.loaded / e.total);
+  };
+
+  xhr.onerror = () => done("Upload failed. Check the connection and try again.", "bad");
+
+  xhr.onload = async () => {
+    let body = {};
+    try { body = JSON.parse(xhr.responseText); } catch (e) {}
+
+    if (xhr.status !== 200) {
+      done(typeof body.detail === "string" ? body.detail : "Upload failed.", "bad");
+      return;
+    }
+
+    showBar("Checking the video", null);
+    await loadLibrary(body.source);
+    const ok = await useSource(body.source, false);
+    done(ok ? "Uploaded. Draw a tripwire if you like, then press Play." : "Uploaded, but it could not be loaded.",
+         ok ? "ok" : "bad");
+  };
+
+  xhr.send(fd);
+}
+
+$("uploadBtn").onclick = () => $("fileInput").click();
+
+$("fileInput").onchange = e => {
+  const f = e.target.files[0];
+  e.target.value = "";
+  if (f) uploadFile(f);
+};
+
+["dragenter", "dragover"].forEach(t =>
+  screenEl.addEventListener(t, e => {
+    e.preventDefault();
+    screenEl.classList.add("dragging");
+  }));
+["dragleave", "drop"].forEach(t =>
+  screenEl.addEventListener(t, e => {
+    e.preventDefault();
+    screenEl.classList.remove("dragging");
+  }));
+screenEl.addEventListener("drop", e => {
+  const f = e.dataTransfer && e.dataTransfer.files[0];
+  if (f) uploadFile(f);
+});
+// a file dropped outside the video area must not make the browser open it
+window.addEventListener("dragover", e => e.preventDefault());
+window.addEventListener("drop", e => e.preventDefault());
+
+function syncStatus() {
+  const t = statusText();
+  $("linkText").textContent = t;
+  const led = $("led");
+  led.className = "led" + (t === "Live" ? " live" : (t === "Paused" || t === "Video ended" || t === "Reconnecting") ? " warn" : "");
+}
+
+function syncControls() {
+  const playing = !!S.data.playing, ended = !!S.data.ended;
+  const paused = !playing && !ended && !!S.frame && !S.previewOnly;
+  $("play").classList.toggle("lit", playing);
+  $("play").setAttribute("aria-pressed", playing);
+  $("pause").classList.toggle("lit", paused);
+  $("pause").setAttribute("aria-pressed", paused);
+  $("playLabel").textContent = ended ? "Replay" : "Play";
+}
+
+/* ------------------------------------------------------------------ */
+/* alarm sound                                                         */
+/* ------------------------------------------------------------------ */
+
+$("alarm").onchange = e => {
+  if (e.target.checked) {
+    S.audio = S.audio || new (window.AudioContext || window.webkitAudioContext)();
+    S.audio.resume();
+    sound("baggage");   // short preview so the operator knows it works
+  }
+};
+
+function sound(kind) {
+  const a = S.audio;
+  if (!a || !$("alarm").checked) return;
+
+  const seq = kind === "baggage" ? [740, 0, 740, 0, 740] : [960, 660, 960, 660, 960, 660];
+  const step = 0.25;
+  const t = a.currentTime;
+  const osc = a.createOscillator();
+  const gain = a.createGain();
+  osc.type = "square";
+  osc.connect(gain);
+  gain.connect(a.destination);
+
+  seq.forEach((f, i) => {
+    osc.frequency.setValueAtTime(f || 1, t + i * step);
+    gain.gain.setValueAtTime(f ? 0.06 : 0, t + i * step);
+  });
+  gain.gain.setValueAtTime(0, t + seq.length * step);
+  osc.start(t);
+  osc.stop(t + seq.length * step);
+}
+
+/* ------------------------------------------------------------------ */
+/* settings                                                            */
+/* ------------------------------------------------------------------ */
+
+$("seconds").addEventListener("input", e => {
+  $("secondsOut").textContent = e.target.value + " s";
+  S.bagSig = "";
+  renderBags();
+});
+$("seconds").addEventListener("change", e =>
+  post("/api/config", { unattended_seconds: e.target.value }));
+
+$("conf").addEventListener("input", e => {
+  $("confOut").textContent = (+e.target.value).toFixed(2);
+});
+$("conf").addEventListener("change", e =>
+  post("/api/config", { bag_conf: e.target.value }));
+
+$("rememberMode").onclick = () => {
+  const on = $("rememberMode").getAttribute("aria-pressed") !== "true";
+  $("rememberMode").setAttribute("aria-pressed", on);
+  post("/api/config", { remember_lost: on ? 1 : 0 });
+};
+
+$("ownerMode").onclick = () => {
+  const on = $("ownerMode").getAttribute("aria-pressed") !== "true";
+  $("ownerMode").setAttribute("aria-pressed", on);
+  post("/api/config", { owner_aware: on ? 1 : 0 });
+};
+
+/* ------------------------------------------------------------------ */
+/* bags in view                                                        */
+/* ------------------------------------------------------------------ */
+
+function renderBags() {
+  const T = +$("seconds").value || 15;
+  const list = S.data.bags || [];
+  const sig = list.map(b => `${b.id}:${b.status}:${Math.round(b.alone)}:${b.owner}:${b.ghost}`).join("|") + "/" + T;
+  if (sig === S.bagSig) return;
+  S.bagSig = sig;
+
+  const host = $("bags");
+  host.replaceChildren();
+
+  if (!list.length) {
+    host.append(el("p", "empty", "No bags in view. A bag appears here with a timer as soon as the camera sees one."));
+    return;
+  }
+
+  list.forEach(b => {
+    const row = el("div", "bagrow " + b.status);
+    const top = el("div", "bagtop");
+    top.append(
+      el("span", "bagname", `${cap(b.label)} #${b.id}${b.ghost ? " (not in view)" : ""}`),
+      el("span", "bagstate", (() => {
+        const o = b.owner;
+        if (b.status === "unattended")
+          return o != null ? `Owner #${o} left` : "Unattended";
+        if (b.status === "alone")
+          return o != null ? `Owner #${o} away ${Math.round(b.alone)} of ${T} s`
+                           : `${Math.round(b.alone)} of ${T} s alone`;
+        return o != null ? `With owner #${o}` : "With a person";
+      })())
+    );
+
+    const track = el("div", "track");
+    const fill = document.createElement("i");
+    const pct = b.status === "unattended" ? 100 : Math.min(100, (b.alone / T) * 100);
+    fill.style.width = pct + "%";
+    track.append(fill);
+
+    row.append(top, track);
+    host.append(row);
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* incidents                                                           */
+/* ------------------------------------------------------------------ */
+
+const viewer = $("viewer");
+
+function openViewer(e, k) {
+  $("vImg").src = "/snapshots/" + encodeURIComponent(e.img);
+  $("vImg").alt = `${k.label}: ${e.text}`;
+  $("vText").textContent = `${k.label}, ${e.t}. ${e.text}`;
+  viewer.showModal();
+}
+
+$("vClose").onclick = () => viewer.close();
+viewer.addEventListener("click", e => { if (e.target === viewer) viewer.close(); });
+
+function renderIncidents(newestId) {
+  const list = [...S.events].reverse();
+  const sig = list.map(e => e.id).join(",");
+  $("incCount").textContent = S.seen.size ? `(${S.seen.size})` : "";
+  if (sig === S.incSig) return;
+  S.incSig = sig;
+
+  const host = $("incidents");
+  host.replaceChildren();
+
+  if (!list.length) {
+    const li = el("li", "empty", "No incidents yet. Draw a tripwire or restricted zone on the video to start watching for intruders.");
+    host.append(li);
+    return;
+  }
+
+  list.forEach(e => {
+    const k = KIND[e.kind] || { label: "Alert", cls: "intrusion" };
+    const li = document.createElement("li");
+    const btn = el("button", "incident " + k.cls + (e.id === newestId ? " latest" : ""));
+    btn.type = "button";
+
+    const img = new Image();
+    img.alt = "";
+    img.loading = "lazy";
+    img.src = "/snapshots/" + encodeURIComponent(e.img);
+    img.onerror = () => img.classList.add("missing");
+
+    const body = el("span", "incbody");
+    body.append(el("span", "inckind", k.label), el("span", "inctext", e.text));
+
+    btn.append(img, body, el("time", "inctime", e.t));
+    btn.onclick = () => openViewer(e, k);
+
+    li.append(btn);
+    host.append(li);
+  });
+}
+
+let alertTimer = null;
+
+function onEvents(list) {
+  const fresh = [];
+  list.forEach(e => {
+    if (!S.seen.has(e.id)) {
+      S.seen.add(e.id);
+      fresh.push(e);
+    }
+  });
+  S.events = list;
+
+  // Incidents already on the server when the page opens are history: list them, don't alarm.
+  const announce = !S.first && fresh.length;
+  const newest = fresh.length ? fresh[fresh.length - 1] : null;
+
+  renderIncidents(announce && newest ? newest.id : null);
+
+  if (announce && newest) {
+    const k = KIND[newest.kind] || { label: "Alert" };
+    S.alertText = `${k.label}: ${newest.text}`;
+    S.alertUntil = performance.now() + 5000;
+    screenEl.classList.add("alert");
+    clearTimeout(alertTimer);
+    alertTimer = setTimeout(() => {
+      screenEl.classList.remove("alert");
+      draw();
+    }, 5000);
+    sound(newest.kind);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* server connection                                                   */
+/* ------------------------------------------------------------------ */
+
+function connect() {
+  const proto = location.protocol === "https:" ? "wss://" : "ws://";
+  const ws = new WebSocket(proto + location.host + "/ws");
+
+  ws.onopen = () => {
+    S.link = "live";
+    syncStatus();
+    draw();
+  };
+
+  ws.onclose = () => {
+    S.link = "closed";
+    syncStatus();
+    draw();
+    setTimeout(connect, 1000);
+  };
+
+  ws.onmessage = ev => {
+    const d = JSON.parse(ev.data);
+    S.data = Object.assign({ persons: [], bags: [] }, d);
+
+    onEvents(d.events || []);
+    S.first = false;
+
+    syncStatus();
+    syncControls();
+    renderBags();
+
+    const im = new Image();
+    im.onload = () => setFrame(im, false);
+    im.src = "data:image/jpeg;base64," + d.img;
+  };
+}
+
+fetch("/api/state")
+  .then(r => r.json())
+  .then(st => {
+    S.zones = st.zones || { line: null, polygon: null };
+    S.source = st.source || "";
+
+    const secs = st.cfg.unattended_seconds;
+    $("seconds").value = secs;
+    $("secondsOut").textContent = secs + " s";
+
+    $("ownerMode").setAttribute("aria-pressed", st.cfg.owner_aware == null || st.cfg.owner_aware >= 0.5);
+    $("rememberMode").setAttribute("aria-pressed", st.cfg.remember_lost == null || st.cfg.remember_lost >= 0.5);
+
+    $("conf").value = st.cfg.bag_conf;
+    $("confOut").textContent = (+st.cfg.bag_conf).toFixed(2);
+
+    S.data.playing = st.playing;
+    S.data.ended = st.ended;
+    syncControls();
+    renderBags();
+    draw();
+
+    loadLibrary().then(() => {
+      // idle at start: show the first frame so zones can be drawn before Play
+      if (!st.playing && !S.frame) showPreview(S.source);
+    });
+  })
+  .catch(() => {});
+
+setInterval(draw, 1000);   // keeps the on-screen clock moving while paused
+
+updateHint();
+renderIncidents(null);
+renderBags();
+syncControls();
+draw();
+connect();
+
+})();
+</script>
+
+</body>
+</html>
