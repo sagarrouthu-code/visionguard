@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from bag_owner import update_owner, bag_moved   # owner-aware unattended-bag logic
-from bag_memory import update_ghosts   # remember bags the detector loses
+from bag_memory import update_ghosts, suppress_overlapping   # remember lost bags; merge duplicate boxes
 from ultralytics import YOLO
 
 
@@ -64,6 +64,13 @@ ATTEND_S = float(os.getenv("VG_ATTEND_S", "2.0"))
 # a bag must keep shifting this long (seconds) to count as moved, so a box that
 # jumps when someone walks in front of it is ignored. 0 = old behaviour.
 MOVE_S = float(os.getenv("VG_MOVE_S", "1.0"))
+# the owner must be missing this long (seconds) before the bag counts as unattended,
+# so a one-frame tracker drop does not show "owner away". 0 = old behaviour.
+OWNER_AWAY_S = float(os.getenv("VG_OWNER_AWAY_S", "2.0"))
+# if the owner's track is lost (the tracker gave them a new ID, or they left and came
+# back), a person who stays near the bag this long (seconds) takes over as its keeper
+# and the away timer resets. Only applies while the owner's own track is missing.
+CUSTODY_S = float(os.getenv("VG_CUSTODY_S", "2.0"))
 
 OUT_W = 960
 
@@ -102,6 +109,13 @@ state = {
     # Set VG_AUTOPLAY=1 to start playing as soon as the server starts.
     "playing": os.getenv("VG_AUTOPLAY", "0") == "1",
     "ended": False,
+
+    # timeline: seconds to jump to (None = no request), one-frame step while paused,
+    # current video time and total length in seconds (None for a webcam)
+    "seek": None,
+    "step": False,
+    "vt": 0.0,
+    "dur": None,
 }
 
 lock = threading.Lock()
@@ -135,7 +149,14 @@ def dist_to_box(pt, b):
 # EVENTS
 # ---------------------------------------------------------
 
-def add_event(kind, text, frame, box=None):
+def fmt_clock(sec):
+    """Seconds -> m:ss.s  (e.g. 27.4 -> 0:27.4)"""
+    m, s = divmod(round(float(sec), 1), 60)
+    return f"{int(m)}:{s:04.1f}"
+
+
+def add_event(kind, text, frame, box=None, video_t=None):
+    """video_t = seconds into the video file (None for a webcam)."""
     img = frame.copy()
 
     if box:
@@ -157,8 +178,17 @@ def add_event(kind, text, frame, box=None):
         "kind": kind,
         "text": text,
         "t": time.strftime("%H:%M:%S"),
+        "video_t": None if video_t is None else round(float(video_t), 1),
+        "src": state["source"],
         "img": name,
     }
+
+    # one clear line per event, ready to copy into the labels CSV
+    when = "webcam" if video_t is None else f"video {fmt_clock(video_t)}"
+    print(
+        f"[EVENT] {when} | wall {ev['t']} | {kind} | "
+        f"{text} | source {state['source']}"
+    )
 
     with lock:
         state["events"] = (state["events"] + [ev])[-30:]
@@ -234,7 +264,10 @@ def worker():
         # PAUSE
         # -------------------------------------------------
 
-        if not state["playing"]:
+        # a seek while paused shows exactly one frame, then stays paused
+        stepping = bool(state["step"])
+
+        if not state["playing"] and not stepping:
             if paused_at is None:
                 paused_at = time.time()
             time.sleep(0.1)
@@ -242,7 +275,7 @@ def worker():
 
         # Resuming: shift the playback clock by the time spent paused, otherwise
         # the real-time catch-up below fast-forwards the video (and the bag timers).
-        if paused_at is not None:
+        if state["playing"] and paused_at is not None:
             t0 += time.time() - paused_at
             paused_at = None
 
@@ -268,14 +301,61 @@ def worker():
             if not cap.isOpened():
                 print(f"[ERROR] Could not open source: {src}")
                 state["playing"] = False
+                state["step"] = False
+                state["seek"] = None
                 time.sleep(1)
                 continue
 
             vfps = cap.get(cv2.CAP_PROP_FPS) or 25.0
 
+            frames_total = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+            state["dur"] = (
+                round(frames_total / vfps, 2)
+                if is_file and frames_total > 0
+                else None
+            )
+
             idx = 0
             t0 = time.time()
+            state["vt"] = 0.0
 
+            bags.clear()
+            prev_foot.clear()
+            inside.clear()
+            flagged.clear()
+            first_seen.clear()
+
+            state["ended"] = False
+
+            try:
+                model.predictor.trackers[0].reset()
+            except Exception:
+                pass
+
+        # -------------------------------------------------
+        # SEEK (jump to a time in the clip; also works while paused)
+        # -------------------------------------------------
+
+        if state["seek"] is not None and is_file and cap is not None:
+
+            want = max(0, int(state["seek"] * vfps))
+            state["seek"] = None
+
+            if state["dur"]:
+                want = min(want, max(0, int(state["dur"] * vfps) - 1))
+
+            cap.set(cv2.CAP_PROP_POS_FRAMES, want)
+
+            # trust the decoder's position, it can land a frame or two off
+            idx = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+
+            # keep real-time pacing aligned with the new position
+            t0 = time.time() - idx / vfps
+
+            if not state["playing"]:
+                paused_at = time.time()
+
+            # tracking memory belongs to the old position
             bags.clear()
             prev_foot.clear()
             inside.clear()
@@ -293,7 +373,7 @@ def worker():
         # KEEP FILE VIDEO REAL-TIME
         # -------------------------------------------------
 
-        if is_file:
+        if is_file and not stepping:
 
             target = (time.time() - t0) * vfps
 
@@ -320,6 +400,7 @@ def worker():
 
                 state["playing"] = False
                 state["ended"] = True
+                state["step"] = False
 
                 print("[INFO] Video ended.")
 
@@ -337,6 +418,8 @@ def worker():
             if is_file
             else time.time()
         )
+
+        state["vt"] = now if is_file else None
 
         # -------------------------------------------------
         # RESIZE
@@ -360,7 +443,7 @@ def worker():
         # DISPLAY-ONLY FRAME
         # -------------------------------------------------
 
-        if idx % EVERY:
+        if idx % EVERY and not stepping:
 
             ok2, j = cv2.imencode(
                 ".jpg",
@@ -451,6 +534,7 @@ def worker():
                         {
                             "label": BAGS[k],
                             "box": b.tolist(),
+                            "conf": float(c),
                         }
                     )
 
@@ -541,6 +625,7 @@ def worker():
                     f"Person #{tid} {hit}",
                     frame,
                     b,
+                    video_t=now if is_file else None,
                 )
 
             p["flag"] = (
@@ -550,6 +635,10 @@ def worker():
         # -------------------------------------------------
         # UNATTENDED BAGGAGE
         # -------------------------------------------------
+
+        # one physical bag can come back twice in a frame (handbag + backpack):
+        # keep one box, otherwise it becomes two bag entries with two owners
+        bag_dets = suppress_overlapping(bag_dets)
 
         match_px = 0.07 * w
         still_px = 0.02 * w
@@ -630,11 +719,70 @@ def worker():
                 near_px=near_px,
                 away_px=0.22 * w,
                 handoff_px=0.07 * w,
-                close_px=0.05 * w,
+                close_px=near_px,
                 first_seen=first_seen,
                 owner_aware=cfg["owner_aware"] >= 0.5,
                 dwell_s=ATTEND_S,
+                away_s=OWNER_AWAY_S,
+                custody_s=CUSTODY_S,
             )
+
+            # Diagnostic: one line each time a bag's owner state changes, with the
+            # reason (is the owner's track visible, how far, who else is near).
+            if cfg["owner_aware"] >= 0.5:
+                ow = best.get("owner")
+                people_now = dict(owner_people)
+
+                if ow is None:
+                    ostate = "no-owner"
+                elif best.get("alone") is not None:
+                    ostate = "AWAY"
+                elif best.get("away_since") is not None:
+                    ostate = "missing(grace)"
+                else:
+                    ostate = "with-bag"
+
+                nearest_now = sorted(
+                    (round(dist_to_box(c, bx)), tid)
+                    for tid, bx in owner_people
+                )[:3]
+
+                # who is standing near the bag right now (tracked people)
+                near_ids = tuple(
+                    sorted(tid for dpx, tid in nearest_now if dpx < near_px)
+                )
+
+                state_changed = best.get("_ostate") != (ow, ostate)
+                near_changed = (
+                    ostate in ("AWAY", "missing(grace)")
+                    and best.get("_near") != near_ids
+                )
+
+                best["_near"] = near_ids
+
+                if state_changed or near_changed:
+                    best["_ostate"] = (ow, ostate)
+
+                    owner_dist = (
+                        round(dist_to_box(c, people_now[ow]))
+                        if ow in people_now
+                        else None
+                    )
+                    when = (
+                        f"video {fmt_clock(now)}"
+                        if is_file
+                        else "webcam"
+                    )
+
+                    print(
+                        f"[OWNER] {when} | bag #{best['id']} {d['label']} | "
+                        f"owner #{ow} {ostate}"
+                        f"{' | people near bag: ' + str(list(near_ids)) if near_changed and not state_changed else ''} | "
+                        f"owner_track_visible={ow in people_now} "
+                        f"owner_dist_px={owner_dist} | "
+                        f"nearest(px,id)={nearest_now} | "
+                        f"near_px={int(near_px)} away_px={int(0.22 * w)}"
+                    )
 
             best["for"] = (
                 0.0
@@ -669,6 +817,7 @@ def worker():
                     text,
                     frame,
                     b,
+                    video_t=now if is_file else None,
                 )
 
         # Bags the detector lost: keep timing them, re-check the spot before alerting
@@ -713,6 +862,7 @@ def worker():
                     f"(remembered)",
                     frame,
                     e["box"],
+                    video_t=now if is_file else None,
                 )
 
         # Remove lost bags
@@ -835,6 +985,8 @@ def worker():
                     for e in live + ghosts
                 ],
             )
+
+        state["step"] = False
 
 
 # ---------------------------------------------------------
@@ -998,6 +1150,11 @@ def set_source(
 
     state["source"] = src
 
+    state["seek"] = None
+    state["step"] = False
+    state["vt"] = 0.0
+    state["dur"] = None
+
     state["restart"] = True
     # play=false loads the video and waits, so you can draw zones first
     state["playing"] = bool(body.get("play", True))
@@ -1031,6 +1188,49 @@ def list_videos():
         "upload": HAVE_UPLOAD,
         "max_mb": MAX_UPLOAD_MB,
     }
+
+
+@app.get("/api/info")
+def get_video_info(source: str):
+    """Length of a video in seconds, so the timeline works before Play."""
+
+    src = resolve_video(source)
+
+    if src is None or src.isdigit():
+        raise HTTPException(404, "No info available.")
+
+    cap = cv2.VideoCapture(str(ROOT / src))
+
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS) or 0
+        frames = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+    finally:
+        cap.release()
+
+    return {
+        "duration": round(frames / fps, 2) if fps > 0 and frames > 0 else None,
+        "fps": round(fps, 2),
+    }
+
+
+@app.post("/api/seek")
+def seek_video(
+    body: dict = Body(...)
+):
+    """Jump to a time (seconds). While paused it shows that one frame."""
+
+    if state["source"].isdigit():
+        raise HTTPException(400, "A webcam cannot be rewound.")
+
+    try:
+        t = float(body.get("t"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Give a time in seconds.")
+
+    state["seek"] = max(0.0, t)
+    state["step"] = True
+
+    return {"ok": True}
 
 
 @app.get("/api/preview")
@@ -1231,9 +1431,11 @@ async def ws(
                                 s["fps"],
                                 1,
                             ),
-                            "events": s["events"][-10:],
+                            "events": s["events"][-30:],
                             "playing": s["playing"],
                             "ended": s["ended"],
+                            "t": s["vt"],
+                            "dur": s["dur"],
                         }
                     )
                 )
@@ -1250,8 +1452,13 @@ async def ws(
 
 if __name__ == "__main__":
 
+    # Open the dashboard at http://localhost:8000
+    # 0.0.0.0 is a listen address, not a web address, so do not type it in a browser.
+    # To let other devices on your network connect, set VG_HOST=0.0.0.0 (and allow
+    # Python through the Windows firewall). Uploads are open to anyone who can reach
+    # the server, so keep it on 127.0.0.1 on shared wifi.
     uvicorn.run(
         app,
-        host="0.0.0.0",
-        port=8000,
+        host=os.getenv("VG_HOST", "127.0.0.1"),
+        port=int(os.getenv("VG_PORT", "8000")),
     )

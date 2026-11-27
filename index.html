@@ -176,7 +176,7 @@ button,input{font:inherit;color:inherit}
 }
 
 .screen{
-  width:min(100%, calc((100dvh - 232px) * var(--ratio, 1.7778)));
+  width:min(100%, calc((100dvh - 276px) * var(--ratio, 1.7778)));
   aspect-ratio:var(--ratio, 1.7778);
   margin:4px auto 0;
   background:var(--screen);
@@ -198,9 +198,37 @@ button,input{font:inherit;color:inherit}
 .screen.dragging .drop{display:flex}
 .screen canvas{display:block;width:100%;height:100%;cursor:crosshair}
 
+/* timeline / playhead */
+.timeline{
+  display:flex;align-items:center;gap:12px;
+  width:min(100%, calc((100dvh - 276px) * var(--ratio, 1.7778)));
+  margin:0 auto;
+  padding:6px 0 2px;
+}
+.timeline[hidden]{display:none}
+.tl-time{min-width:64px;text-align:center;font-weight:600;font-variant-numeric:tabular-nums}
+.tl-track{
+  position:relative;flex:1;height:14px;
+  background:#cdd2d7;border:1px solid var(--control);border-radius:2px;
+  cursor:pointer;touch-action:none;
+}
+.tl-track:focus-visible{outline:3px solid var(--focus);outline-offset:8px}
+.tl-fill{position:absolute;left:0;top:0;bottom:0;width:0;background:#9aa1a9;pointer-events:none}
+.tl-head{
+  position:absolute;top:-8px;left:0;width:4px;height:28px;margin-left:-2px;
+  background:var(--ink);border:1px solid #fff;border-radius:1px;
+  pointer-events:none;
+}
+.tl-mark{
+  position:absolute;top:-5px;width:6px;height:22px;margin-left:-3px;
+  padding:0;border:0;background:var(--red);cursor:pointer;
+}
+.tl-mark.baggage{background:var(--amber-fill)}
+.tl-mark:hover{outline:2px solid var(--ink)}
+
 .toolbar{
   display:flex;flex-wrap:wrap;gap:10px 28px;align-items:center;
-  width:min(100%, calc((100dvh - 232px) * var(--ratio, 1.7778)));
+  width:min(100%, calc((100dvh - 276px) * var(--ratio, 1.7778)));
   margin:0 auto;
 }
 .group{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
@@ -208,7 +236,7 @@ button,input{font:inherit;color:inherit}
 .group-name{color:var(--muted);font-size:13px;margin-right:2px}
 
 .hint{
-  width:min(100%, calc((100dvh - 232px) * var(--ratio, 1.7778)));
+  width:min(100%, calc((100dvh - 276px) * var(--ratio, 1.7778)));
   margin:0 auto;
   color:var(--muted);font-size:13.5px;
   min-height:1.4em;
@@ -406,6 +434,17 @@ dialog img{display:block;width:100%;height:auto;background:#000}
       <div class="drop" id="drop">Drop a video file here to upload it</div>
     </div>
 
+    <div class="timeline" id="timeline" hidden>
+      <span class="tl-time" id="tlNow">0:00.0</span>
+      <div class="tl-track" id="tlTrack" role="slider" tabindex="0"
+           aria-label="Video position. Arrow keys jump one second, Shift plus arrow five seconds."
+           aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div class="tl-fill" id="tlFill"></div>
+        <div class="tl-head" id="tlHead"></div>
+      </div>
+      <span class="tl-time" id="tlDur">0:00.0</span>
+    </div>
+
     <div class="toolbar">
       <div class="group" role="group" aria-label="Playback">
         <button class="btn go" id="play" type="button" aria-pressed="false">
@@ -531,6 +570,8 @@ const S = {
   mouse: null,
   seen: new Set(),
   first: true,
+  vt: 0,                // current video time (seconds)
+  dur: null,            // clip length (seconds), null for a webcam
   previewOnly: false,   // showing a still of the first frame, not live video
   maxMb: 500,
   events: [],
@@ -556,6 +597,14 @@ function el(tag, cls, text) {
 }
 
 const cap = t => t ? t[0].toUpperCase() + t.slice(1) : t;
+
+// seconds into the video -> m:ss.s  (27.4 -> 0:27.4)
+const clock = sec => {
+  const r = Math.round(sec * 10) / 10;       // round first so 59.96 becomes 1:00.0, not 0:60.0
+  const m = Math.floor(r / 60);
+  const s = (r - m * 60).toFixed(1).padStart(4, "0");
+  return m + ":" + s;
+};
 
 function post(url, body = {}) {
   return fetch(url, {
@@ -916,6 +965,106 @@ $("stop").onclick    = () => post("/api/video/stop");
 $("restart").onclick = () => post("/api/video/restart");
 
 /* ------------------------------------------------------------------ */
+/* timeline / playhead                                                 */
+/* ------------------------------------------------------------------ */
+
+const track = $("tlTrack");
+let dragging = false;
+let lastSeek = 0;
+let markSig = "";
+
+function renderMarkers() {
+  const marks = (S.events || []).filter(e =>
+    e.video_t != null && S.dur > 0 && (e.src ? e.src === S.source : true));
+  const sig = marks.map(e => e.id).join(",") + "/" + S.dur;
+  if (sig === markSig) return;
+  markSig = sig;
+
+  track.querySelectorAll(".tl-mark").forEach(n => n.remove());
+  marks.forEach(e => {
+    const b = el("button", "tl-mark " + (e.kind === "baggage" ? "baggage" : "intrusion"));
+    b.type = "button";
+    b.style.left = Math.min(100, e.video_t / S.dur * 100) + "%";
+    b.dataset.t = e.video_t;
+    b.title = `${clock(e.video_t)}  ${e.text}`;
+    track.append(b);
+  });
+}
+
+function updateTimeline() {
+  const tl = $("timeline");
+  tl.hidden = !(S.dur > 0);          // a webcam has no timeline
+  if (tl.hidden) return;
+
+  const t = Math.max(0, Math.min(S.vt || 0, S.dur));
+  const pct = t / S.dur * 100;
+  $("tlFill").style.width = pct + "%";
+  $("tlHead").style.left = pct + "%";
+  $("tlNow").textContent = clock(t);
+  $("tlDur").textContent = clock(S.dur);
+  track.setAttribute("aria-valuenow", Math.round(pct));
+  track.setAttribute("aria-valuetext", clock(t) + " of " + clock(S.dur));
+  renderMarkers();
+}
+
+function seekTo(t) {
+  if (!(S.dur > 0)) return;
+  t = Math.max(0, Math.min(t, S.dur - 0.05));
+  S.vt = t;
+  updateTimeline();
+  post("/api/seek", { t });
+}
+
+const timeAt = e => {
+  const r = track.getBoundingClientRect();
+  return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * S.dur;
+};
+
+track.addEventListener("pointerdown", e => {
+  if (e.target.dataset && e.target.dataset.t != null) {      // clicked an event marker
+    seekTo(+e.target.dataset.t);
+    return;
+  }
+  dragging = true;
+  if (track.setPointerCapture) track.setPointerCapture(e.pointerId);
+  lastSeek = performance.now();
+  seekTo(timeAt(e));
+});
+
+track.addEventListener("pointermove", e => {
+  if (!dragging) return;
+  S.vt = timeAt(e);
+  updateTimeline();
+  const now = performance.now();
+  if (now - lastSeek > 150) {            // do not flood the server while dragging
+    lastSeek = now;
+    seekTo(S.vt);
+  }
+});
+
+const endDrag = e => {
+  if (!dragging) return;
+  dragging = false;
+  if (e && e.clientX != null) seekTo(timeAt(e));
+};
+track.addEventListener("pointerup", endDrag);
+track.addEventListener("pointercancel", () => { dragging = false; });
+
+// Left / Right = 1 second, Shift = 5 seconds
+document.addEventListener("keydown", e => {
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+  const tag = (document.activeElement || {}).tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+  if (!(S.dur > 0)) return;
+  e.preventDefault();
+  const now = performance.now();
+  if (now - lastSeek < 120) return;
+  lastSeek = now;
+  const step = e.shiftKey ? 5 : 1;
+  seekTo((S.vt || 0) + (e.key === "ArrowLeft" ? -step : step));
+});
+
+/* ------------------------------------------------------------------ */
 /* video library + upload                                              */
 /* ------------------------------------------------------------------ */
 
@@ -991,6 +1140,18 @@ async function loadLibrary(select) {
 
 function showPreview(source) {
   if (!source || source === "0") return;
+
+  fetch("/api/info?source=" + encodeURIComponent(source))
+    .then(r => r.json())
+    .then(info => {
+      if (S.previewOnly || !S.frame) {
+        S.dur = info.duration || null;
+        S.vt = 0;
+        updateTimeline();
+      }
+    })
+    .catch(() => {});
+
   const im = new Image();
   im.onload = () => setFrame(im, true);
   im.src = "/api/preview?source=" + encodeURIComponent(source) + "&t=" + Date.now();
@@ -1022,6 +1183,10 @@ async function useSource(source, play) {
   S.data.ended = false;
   S.frame = null;
   S.previewOnly = false;
+  S.dur = null;
+  S.vt = 0;
+  markSig = "";
+  updateTimeline();
   syncStatus();
   syncControls();
   draw();
@@ -1251,7 +1416,7 @@ const viewer = $("viewer");
 function openViewer(e, k) {
   $("vImg").src = "/snapshots/" + encodeURIComponent(e.img);
   $("vImg").alt = `${k.label}: ${e.text}`;
-  $("vText").textContent = `${k.label}, ${e.t}. ${e.text}`;
+  $("vText").textContent = `${k.label}, ${e.video_t != null ? "video " + clock(e.video_t) : e.t}. ${e.text}`;
   viewer.showModal();
 }
 
@@ -1289,7 +1454,7 @@ function renderIncidents(newestId) {
     const body = el("span", "incbody");
     body.append(el("span", "inckind", k.label), el("span", "inctext", e.text));
 
-    btn.append(img, body, el("time", "inctime", e.t));
+    btn.append(img, body, el("time", "inctime", e.video_t != null ? clock(e.video_t) : e.t));
     btn.onclick = () => openViewer(e, k);
 
     li.append(btn);
@@ -1308,6 +1473,7 @@ function onEvents(list) {
     }
   });
   S.events = list;
+  updateTimeline();
 
   // Incidents already on the server when the page opens are history: list them, don't alarm.
   const announce = !S.first && fresh.length;
@@ -1354,12 +1520,16 @@ function connect() {
     const d = JSON.parse(ev.data);
     S.data = Object.assign({ persons: [], bags: [] }, d);
 
+    if (!dragging) S.vt = d.t == null ? 0 : d.t;
+    S.dur = d.dur == null ? null : d.dur;
+
     onEvents(d.events || []);
     S.first = false;
 
     syncStatus();
     syncControls();
     renderBags();
+    updateTimeline();
 
     const im = new Image();
     im.onload = () => setFrame(im, false);
